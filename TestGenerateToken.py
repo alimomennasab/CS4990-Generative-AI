@@ -1,6 +1,5 @@
-# conda: CS4990Env
+# conda: cs4990env
 
-import torch
 import pretty_midi
 import torch
 import torch.nn as nn

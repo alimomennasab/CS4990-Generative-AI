@@ -1,1 +1,5 @@
 /MIDI-VAE_PaperData
+.DS_Store
+/*.mid
+/*.pth
+/*.pkl

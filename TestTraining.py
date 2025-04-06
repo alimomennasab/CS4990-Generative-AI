@@ -1,3 +1,5 @@
+# conda: cs4990env
+
 import pretty_midi
 import os
 import torch
@@ -239,54 +241,43 @@ def train_vae(model, dataloader, optimizer, epochs=10, device='cpu'):
 ##########################################
 if __name__ == "__main__":
     # Load MIDI files for Training.
-    midi_directory = "C:/CS4990/Music_Style_Transform/DataSet/clean_midi/2 Brothers on the 4th Floor"
+    midi_directory = '/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Classic and Bach/barock/Bach/Bwv001- 400 Chorales'
     midi_files = load_midi_files(midi_directory)
 
-    # Example tokenized data.
-    # tokenized_data = [
-    #     ["NOTE_ON_60_64", "TIME_SHIFT_5", "NOTE_OFF_60", "TIME_SHIFT_3", "NOTE_ON_64_64", "TIME_SHIFT_5",
-    #      "NOTE_OFF_64"],
-    #     ["NOTE_ON_62_70", "TIME_SHIFT_4", "NOTE_OFF_62", "TIME_SHIFT_2", "NOTE_ON_65_60", "TIME_SHIFT_5", "NOTE_OFF_65"]
-    # ]
-    tokens = None
+    # Tokenize all MIDI files into a list of sequences
+    tokenized_data = []
     for i, midi_data in enumerate(midi_files):
         tokens = tokenize_midi(midi_data)
-        # Display the first 20 tokens for a quick look at the output
+        tokenized_data.append(tokens) 
         print(f"MIDI file {i} tokens: {tokens[:20]} ...")
 
-    tokenized_data = tokens
-    print("Tokenized Data Set:: ")
-    print(tokenized_data)
+    print("Number of sequences:", len(tokenized_data))
+    print("Sample sequence length:", len(tokenized_data[0]))
 
     # Build vocabulary
     token_to_idx, idx_to_token = build_vocab(tokenized_data)
     vocab_size = len(token_to_idx)
     print("Vocabulary size:", vocab_size)
-    print("token_to_idx:: ")
-    print(token_to_idx)
-    print("idx_to_token:: ")
-    print(idx_to_token)
+    print("Sample tokens:", list(token_to_idx.keys())[:10])
 
-    # Save token_to_idx
+    # Save token mappings
     with open("token_to_idx.pkl", "wb") as f:
         pickle.dump(token_to_idx, f)
-
-    # Save idx_to_token
     with open("idx_to_token.pkl", "wb") as f:
         pickle.dump(idx_to_token, f)
 
     # Create dataset and dataloader
-    max_seq_length = 20  # Adjust based on your tokenized sequence lengths
+    max_seq_length = 100  
     dataset = TokenDataset(tokenized_data, token_to_idx, max_length=max_seq_length)
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)  
 
     # Initialize model and optimizer
     model = MusicVAE(vocab_size, embed_size=128, hidden_size=256, latent_size=64)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001) 
 
     # Train the VAE model
-    train_vae(model, dataloader, optimizer, epochs=10, device='cpu')
+    train_vae(model, dataloader, optimizer, epochs=20, device='cpu') 
 
-    # After training is done, save the model's state dictionary
+    # Save model
     torch.save(model.state_dict(), "music_vae.pth")
     print("Model saved as music_vae.pth")
