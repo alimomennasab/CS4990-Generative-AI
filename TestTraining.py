@@ -10,10 +10,10 @@ from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import pickle
 
-
 ##########################################
 # Step 0: Data Pre-Processing
 ##########################################
+
 def load_midi_files(midi_dir):
     """
     Load all MIDI files from the specified directory.
@@ -28,7 +28,6 @@ def load_midi_files(midi_dir):
             except Exception as e:
                 print(f"Error loading {filename}: {e}")
     return midi_data_list
-
 
 def tokenize_midi(midi_data, time_resolution=0.05):
     """
@@ -84,6 +83,7 @@ def tokenize_midi(midi_data, time_resolution=0.05):
 ##########################################
 # Step 1: Build Vocabulary from Token Data
 ##########################################
+
 def build_vocab(token_sequences, min_freq=1):
     """
     Build a vocabulary from tokenized sequences.
@@ -99,42 +99,25 @@ def build_vocab(token_sequences, min_freq=1):
     idx_to_token = {idx: token for token, idx in token_to_idx.items()}
     return token_to_idx, idx_to_token
 
-
 ##########################################
 # Step 2: Create a Custom Dataset
 ##########################################
+
 class TokenDataset(Dataset):
-    def __init__(self, token_sequences, token_to_idx, max_length=100):
+    def __init__(self, token_sequences, token_to_idx, genre_labels, max_length=100):
         """
         token_sequences: List of token lists.
         token_to_idx: Dictionary mapping tokens to indices.
+        genre_labels: List of genre indices.
         max_length: Maximum length of a sequence (will pad or truncate).
         """
         self.sequences = token_sequences
         self.token_to_idx = token_to_idx
         self.max_length = max_length
+        self.genre_labels = genre_labels
 
     def __len__(self):
         return len(self.sequences)
-
-    """
-    def __getitem__(self, idx):
-        seq = self.sequences[idx]
-        # Add Start Of Sequence and End Of Sequence tokens
-        seq = ["<SOS>"] + seq + ["<EOS>"]
-        # Convert tokens to indices, using <UNK> if token not found
-        seq_idx = [self.token_to_idx.get(token, self.token_to_idx["<UNK>"]) for token in seq]
-        # Pad sequence if necessary
-        if len(seq_idx) < self.max_length:
-            seq_idx += [self.token_to_idx["<PAD>"]] * (self.max_length - len(seq_idx))
-        else:
-            seq_idx = seq_idx[:self.max_length]
-        # Prepare input (all tokens except last) and target (all tokens except first)
-        input_seq = torch.tensor(seq_idx[:-1], dtype=torch.long)
-        target_seq = torch.tensor(seq_idx[1:], dtype=torch.long)
-        return input_seq, target_seq
-    """
-
 
     def __getitem__(self, idx):
         seq = self.sequences[idx]
@@ -154,58 +137,110 @@ class TokenDataset(Dataset):
         # Prepare input (all tokens except last) and target (all tokens except first)
         input_seq = torch.tensor(seq_idx[:-1], dtype=torch.long)
         target_seq = torch.tensor(seq_idx[1:], dtype=torch.long)
-        return input_seq, target_seq
-
+        genre = torch.tensor(self.genre_labels[idx], dtype=torch.long)  # NEW: genre label
+        return input_seq, target_seq, genre
 
 ##########################################
 # Step 3: Define the VAE Model
 ##########################################
+
 class MusicVAE(nn.Module):
-    def __init__(self, vocab_size, embed_size=128, hidden_size=256, latent_size=64, num_layers=1):
+    def __init__(self, vocab_size, embed_size=128, hidden_size=256, latent_size=64, num_layers=1, num_genres=3):
         super(MusicVAE, self).__init__()
+        # Embedding layer to convert token indices into embeddings
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.encoder_lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        self.genre_embedding = nn.Embedding(num_genres, embed_size)  # NEW: genre embedding
+        # Encoder LSTM to process input sequences
+        self.encoder_lstm = nn.LSTM(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
+        # Linear layers to obtain the mean and log variance for the latent distribution
         self.fc_mu = nn.Linear(hidden_size, latent_size)
         self.fc_logvar = nn.Linear(hidden_size, latent_size)
-
-        self.latent_to_hidden = nn.Linear(latent_size, hidden_size)
+        # Linear layer to transform latent vector and genre into initial decoder hidden state
+        self.latent_to_hidden = nn.Linear(latent_size + embed_size, hidden_size)
+        # Decoder LSTM to generate output sequences
         self.decoder_lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        # Final linear layer to map LSTM outputs to vocabulary logits
         self.outputs_fc = nn.Linear(hidden_size, vocab_size)
 
-    def encode(self, x):
-        embedded = self.embedding(x)  # (batch, seq_len, embed_size)
-        _, (h, _) = self.encoder_lstm(embedded)
-        # Use the last hidden state from the final layer
-        h_last = h[-1]  # (batch, hidden_size)
+    def encode(self, x, genre):
+        """
+        Encode input sequence into a latent space, conditioned on genre.
+
+        Args:
+            x: Tensor of token indices with shape (batch, seq_len)
+            genre: Tensor of genre indices with shape (batch,)
+
+        Returns:
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+        """
+        embedded = self.embedding(x)
+        genre_emb = self.genre_embedding(genre).unsqueeze(1).repeat(1, x.size(1), 1)
+        combined = torch.cat([embedded, genre_emb], dim=2)
+        _, (h, _) = self.encoder_lstm(combined)
+        h_last = h[-1]
         mu = self.fc_mu(h_last)
         logvar = self.fc_logvar(h_last)
         return mu, logvar
 
     def reparameterize(self, mu, logvar):
+        """
+        Apply the reparameterization trick to sample from the latent distribution.
+
+        Args:
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+
+        Returns:
+            z: Sampled latent vector.
+        """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def decode(self, z, input_seq):
-        # Prepare initial hidden state for decoder from latent vector
-        hidden = self.latent_to_hidden(z)
-        hidden = hidden.unsqueeze(0)  # (1, batch, hidden_size)
-        cell = torch.zeros_like(hidden)  # Initialize cell state to zeros
+    def decode(self, z, input_seq, genre):
+        """
+        Decode the latent vector to generate an output sequence, conditioned on genre.
+
+        Args:
+            z: Latent vector.
+            input_seq: Input sequence for the decoder (for teacher forcing during training).
+            genre: Genre label tensor.
+
+        Returns:
+            logits: Unnormalized scores for each token in the vocabulary.
+        """
+        genre_emb = self.genre_embedding(genre)
+        z_cat = torch.cat([z, genre_emb], dim=1)
+        hidden = self.latent_to_hidden(z_cat).unsqueeze(0)
+        cell = torch.zeros_like(hidden)
         embedded = self.embedding(input_seq)
         output, _ = self.decoder_lstm(embedded, (hidden, cell))
-        logits = self.outputs_fc(output)  # (batch, seq_len, vocab_size)
+        logits = self.outputs_fc(output)
         return logits
 
-    def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        logits = self.decode(z, x)
-        return logits, mu, logvar
+    def forward(self, x, genre):
+        """
+        Forward pass through the VAE.
 
+        Args:
+            x: Input token sequence tensor.
+            genre: Genre label tensor.
+
+        Returns:
+            logits: Decoder output logits.
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+        """
+        mu, logvar = self.encode(x, genre)
+        z = self.reparameterize(mu, logvar)
+        logits = self.decode(z, x, genre)
+        return logits, mu, logvar
 
 ##########################################
 # Step 4: Define the Loss Function
 ##########################################
+
 def loss_function(logits, targets, mu, logvar):
     # Reconstruction loss: Flatten predictions and targets
     reconstruction_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0)
@@ -214,70 +249,66 @@ def loss_function(logits, targets, mu, logvar):
     kl_loss /= logits.size(0)  # normalize by batch size
     return reconstruction_loss + kl_loss
 
-
 ##########################################
 # Step 5: Training Loop
 ##########################################
-def train_vae(model, dataloader, optimizer, epochs=10, device='cpu'):
+
+def train_vae(model, dataloader, optimizer, epochs=20, device='cpu'):
     model.train()
     model.to(device)
     for epoch in range(epochs):
         total_loss = 0.0
-        for input_seq, target_seq in dataloader:
+        for input_seq, target_seq, genre in dataloader:
             input_seq = input_seq.to(device)
             target_seq = target_seq.to(device)
+            genre = genre.to(device)
             optimizer.zero_grad()
-            logits, mu, logvar = model(input_seq)
+            logits, mu, logvar = model(input_seq, genre)
             loss = loss_function(logits, target_seq, mu, logvar)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
         avg_loss = total_loss / len(dataloader)
-        print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
-
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
 
 ##########################################
-# Main: Putting It All Together
+# Main
 ##########################################
+
 if __name__ == "__main__":
-    # Load MIDI files for Training.
-    midi_directory = '/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Classic and Bach/barock/Bach/Bwv001- 400 Chorales'
-    midi_files = load_midi_files(midi_directory)
+    # Load MIDI files for all genres
+    genre_paths = {
+        "classical": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
+        "jazz": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Jazz",
+        "pop": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Pop"
+    }
 
-    # Tokenize all MIDI files into a list of sequences
     tokenized_data = []
-    for i, midi_data in enumerate(midi_files):
-        tokens = tokenize_midi(midi_data)
-        tokenized_data.append(tokens) 
-        print(f"MIDI file {i} tokens: {tokens[:20]} ...")
+    genre_labels = []
+
+    for idx, (genre_name, genre_dir) in enumerate(genre_paths.items()):
+        midi_files = load_midi_files(genre_dir)
+        tokenized = [tokenize_midi(midi) for midi in midi_files]
+        tokenized_data.extend(tokenized)
+        genre_labels.extend([idx] * len(tokenized))
 
     print("Number of sequences:", len(tokenized_data))
     print("Sample sequence length:", len(tokenized_data[0]))
 
-    # Build vocabulary
     token_to_idx, idx_to_token = build_vocab(tokenized_data)
-    vocab_size = len(token_to_idx)
-    print("Vocabulary size:", vocab_size)
-    print("Sample tokens:", list(token_to_idx.keys())[:10])
 
-    # Save token mappings
     with open("token_to_idx.pkl", "wb") as f:
         pickle.dump(token_to_idx, f)
     with open("idx_to_token.pkl", "wb") as f:
         pickle.dump(idx_to_token, f)
 
-    # Create dataset and dataloader
-    max_seq_length = 100  
-    dataset = TokenDataset(tokenized_data, token_to_idx, max_length=max_seq_length)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)  
+    dataset = TokenDataset(tokenized_data, token_to_idx, genre_labels, max_length=300)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-    # Initialize model and optimizer
-    model = MusicVAE(vocab_size, embed_size=128, hidden_size=256, latent_size=64)
-    optimizer = optim.Adam(model.parameters(), lr=0.001) 
+    model = MusicVAE(vocab_size=len(token_to_idx), embed_size=128, hidden_size=256, latent_size=64, num_genres=len(genre_paths))
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    # Train the VAE model
-    train_vae(model, dataloader, optimizer, epochs=20, device='cpu') 
+    train_vae(model, dataloader, optimizer, epochs=10, device='cpu')
 
-    # Save model
-    torch.save(model.state_dict(), "music_vae.pth")
-    print("Model saved as music_vae.pth")
+    torch.save(model.state_dict(), "music_vae_genre_transfer.pth")
+    print("Model saved!")
