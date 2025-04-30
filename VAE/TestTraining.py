@@ -65,7 +65,7 @@ def tokenize_midi(midi_data, time_resolution=0.05):
         current_time = event[0]
         time_diff = current_time - previous_time
 
-        # Quantize the time difference based on the resolution
+        # Round the time difference to the nearest step based on a fixed resolution
         steps = int(round(time_diff / time_resolution))
         if steps > 0:
             tokens.append(f"TIME_SHIFT_{steps}")
@@ -121,7 +121,7 @@ class TokenDataset(Dataset):
 
     def __getitem__(self, idx):
         seq = self.sequences[idx]
-        # If seq is a string, convert it into a list of tokens (assuming tokens are space-separated)
+        # If seq is a string, convert it into a list of tokens 
         if isinstance(seq, str):
             seq = seq.split()
 
@@ -129,15 +129,15 @@ class TokenDataset(Dataset):
         seq = ["<SOS>"] + seq + ["<EOS>"]
         # Convert tokens to indices, using <UNK> if token not found
         seq_idx = [self.token_to_idx.get(token, self.token_to_idx["<UNK>"]) for token in seq]
-        # Pad sequence if necessary
+        # Pad the sequence if necessary
         if len(seq_idx) < self.max_length:
             seq_idx += [self.token_to_idx["<PAD>"]] * (self.max_length - len(seq_idx))
         else:
             seq_idx = seq_idx[:self.max_length]
-        # Prepare input (all tokens except last) and target (all tokens except first)
-        input_seq = torch.tensor(seq_idx[:-1], dtype=torch.long)
-        target_seq = torch.tensor(seq_idx[1:], dtype=torch.long)
-        genre = torch.tensor(self.genre_labels[idx], dtype=torch.long)  # NEW: genre label
+        # Prepare input
+        input_seq = torch.tensor(seq_idx[:-1], dtype=torch.long) # input sequence: every token except the last EOS token
+        target_seq = torch.tensor(seq_idx[1:], dtype=torch.long) # target sequence: every token except the first SOS token
+        genre = torch.tensor(self.genre_labels[idx], dtype=torch.long)
         return input_seq, target_seq, genre
 
 ##########################################
@@ -149,7 +149,8 @@ class MusicVAE(nn.Module):
         super(MusicVAE, self).__init__()
         # Embedding layer to convert token indices into embeddings
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.genre_embedding = nn.Embedding(num_genres, embed_size)  # NEW: genre embedding
+        # Embedding layer for genre labels
+        self.genre_embedding = nn.Embedding(num_genres, embed_size)
         # Encoder LSTM to process input sequences
         self.encoder_lstm = nn.LSTM(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
         # Linear layers to obtain the mean and log variance for the latent distribution
@@ -278,14 +279,15 @@ def train_vae(model, dataloader, optimizer, epochs=20, device='cpu'):
 if __name__ == "__main__":
     # Load MIDI files for all genres
     genre_paths = {
-        "classical": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
-        "jazz": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Jazz",
-        "pop": "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Pop"
+        "classical": "/MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
+        "jazz": "/MIDI-VAE_PaperData/Jazz",
+        "pop": "/MIDI-VAE_PaperData/Pop"
     }
 
     tokenized_data = []
     genre_labels = []
 
+    # Tokenize the MIDI files and add genre labels
     for idx, (genre_name, genre_dir) in enumerate(genre_paths.items()):
         midi_files = load_midi_files(genre_dir)
         tokenized = [tokenize_midi(midi) for midi in midi_files]
@@ -295,6 +297,7 @@ if __name__ == "__main__":
     print("Number of sequences:", len(tokenized_data))
     print("Sample sequence length:", len(tokenized_data[0]))
 
+    # Build vocabulary library from tokenized data
     token_to_idx, idx_to_token = build_vocab(tokenized_data)
 
     with open("token_to_idx.pkl", "wb") as f:
@@ -302,12 +305,15 @@ if __name__ == "__main__":
     with open("idx_to_token.pkl", "wb") as f:
         pickle.dump(idx_to_token, f)
 
+    # Load the vocabulary
     dataset = TokenDataset(tokenized_data, token_to_idx, genre_labels, max_length=300)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
+    # Initialize model
     model = MusicVAE(vocab_size=len(token_to_idx), embed_size=128, hidden_size=256, latent_size=64, num_genres=len(genre_paths))
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+    # Training
     train_vae(model, dataloader, optimizer, epochs=10, device='cpu')
 
     torch.save(model.state_dict(), "music_vae_genre_transfer.pth")

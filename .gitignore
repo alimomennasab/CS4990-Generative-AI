@@ -3,4 +3,7 @@
 /*.mid
 /*.pth
 /*.pkl
+/VAE/outputs
+/vanillaGAN/outputs
+/WGAN/outputs
 /groove2groove-data-v1.0.0

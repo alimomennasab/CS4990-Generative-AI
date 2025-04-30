@@ -9,22 +9,39 @@ import os
 from collections import Counter
 
 ##########################################
-# Step 1: VAE Model
+# Step 1: Initialize VAE Model
 ##########################################
 class MusicVAE(nn.Module):
     def __init__(self, vocab_size, embed_size=128, hidden_size=256, latent_size=64, num_layers=1, num_genres=3):
         super(MusicVAE, self).__init__()
         # Embedding layer to convert token indices into embeddings
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.genre_embedding = nn.Embedding(num_genres, embed_size)  # NEW: genre embedding
+        # Embedding layer for genre labels
+        self.genre_embedding = nn.Embedding(num_genres, embed_size)
+        # Encoder LSTM to process input sequences
         self.encoder_lstm = nn.LSTM(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
+        # Linear layers to obtain the mean and log variance for the latent distribution
         self.fc_mu = nn.Linear(hidden_size, latent_size)
         self.fc_logvar = nn.Linear(hidden_size, latent_size)
+        # Linear layer to transform latent vector and genre into initial decoder hidden state
         self.latent_to_hidden = nn.Linear(latent_size + embed_size, hidden_size)
+        # Decoder LSTM to generate output sequences
         self.decoder_lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        # Final linear layer to map LSTM outputs to vocabulary logits
         self.outputs_fc = nn.Linear(hidden_size, vocab_size)
 
     def encode(self, x, genre):
+        """
+        Encode input sequence into a latent space, conditioned on genre.
+
+        Args:
+            x: Tensor of token indices with shape (batch, seq_len)
+            genre: Tensor of genre indices with shape (batch,)
+
+        Returns:
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+        """
         embedded = self.embedding(x)
         genre_emb = self.genre_embedding(genre).unsqueeze(1).repeat(1, x.size(1), 1)
         combined = torch.cat([embedded, genre_emb], dim=2)
@@ -35,11 +52,32 @@ class MusicVAE(nn.Module):
         return mu, logvar
 
     def reparameterize(self, mu, logvar):
+        """
+        Apply the reparameterization trick to sample from the latent distribution.
+
+        Args:
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+
+        Returns:
+            z: Sampled latent vector.
+        """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
     def decode(self, z, input_seq, genre):
+        """
+        Decode the latent vector to generate an output sequence, conditioned on genre.
+
+        Args:
+            z: Latent vector.
+            input_seq: Input sequence for the decoder (for teacher forcing during training).
+            genre: Genre label tensor.
+
+        Returns:
+            logits: Unnormalized scores for each token in the vocabulary.
+        """
         genre_emb = self.genre_embedding(genre)
         z_cat = torch.cat([z, genre_emb], dim=1)
         hidden = self.latent_to_hidden(z_cat).unsqueeze(0)
@@ -50,6 +88,18 @@ class MusicVAE(nn.Module):
         return logits
 
     def forward(self, x, genre):
+        """
+        Forward pass through the VAE.
+
+        Args:
+            x: Input token sequence tensor.
+            genre: Genre label tensor.
+
+        Returns:
+            logits: Decoder output logits.
+            mu: Mean of the latent distribution.
+            logvar: Log variance of the latent distribution.
+        """
         mu, logvar = self.encode(x, genre)
         z = self.reparameterize(mu, logvar)
         logits = self.decode(z, x, genre)
@@ -70,7 +120,7 @@ def tokens_to_midi(tokens, time_resolution=0.05, default_duration=0.5, output_pa
       output_path: Path to save the generated MIDI file.
     """
     midi = pretty_midi.PrettyMIDI()
-    piano = pretty_midi.Instrument(program=0)  # Using piano for example
+    piano = pretty_midi.Instrument(program=0) # MIDI program number for piano
     current_time = 0.0
     pending_notes = {}
 
@@ -103,7 +153,7 @@ def tokens_to_midi(tokens, time_resolution=0.05, default_duration=0.5, output_pa
 # Step 3: Genre Transfer Generation
 ##########################################
 
-def test_generate_token_transfer(model, input_seq, token_to_idx, idx_to_token, source_genre, target_genre, max_length=100, device='cpu'):
+def test_generate_token_transfer_greedy(model, input_seq, token_to_idx, idx_to_token, source_genre, target_genre, max_length=100, device='cpu'):
     """
     Perform genre transfer by encoding with one genre and decoding with another.
     """
@@ -245,7 +295,7 @@ if __name__ == "__main__":
                 tgt_name, _ = genre_dirs[target_genre]
 
                 # Greedy decoding
-                transferred_tokens = test_generate_token_transfer(
+                transferred_tokens = test_generate_token_transfer_greedy(
                     model=loaded_model,
                     input_seq=sample_inputs[source_genre],
                     token_to_idx=token_to_idx,
