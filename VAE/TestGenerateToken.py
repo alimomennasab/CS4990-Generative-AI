@@ -223,9 +223,14 @@ def test_generate_token_transfer_with_temperature(model, input_seq, token_to_idx
 ##########################################
 
 if __name__ == "__main__":
-    with open("token_to_idx.pkl", "rb") as f:
+    run_num = "3"
+    run_folder = os.path.join("outputs", f"run{run_num}")
+    os.makedirs(run_folder, exist_ok=True)
+    print(f"Saving outputs to {run_folder}")
+
+    with open(os.path.join(run_folder, "token_to_idx.pkl"), "rb") as f:
         token_to_idx = pickle.load(f)
-    with open("idx_to_token.pkl", "rb") as f:
+    with open(os.path.join(run_folder, "idx_to_token.pkl"), "rb") as f:
         idx_to_token = pickle.load(f)
 
     vocab_size = len(token_to_idx)
@@ -234,8 +239,9 @@ if __name__ == "__main__":
     latent_size = 64
     num_genres = 3
 
+    model_path = os.path.join(run_folder, "music_vae_genre_transfer.pth")
     loaded_model = MusicVAE(vocab_size, embed_size, hidden_size, latent_size, num_layers=1, num_genres=num_genres)
-    loaded_model.load_state_dict(torch.load("music_vae_genre_transfer.pth", map_location=torch.device('cpu')))
+    loaded_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
     loaded_model.eval()
     print("Model loaded successfully!")
 
@@ -306,7 +312,7 @@ if __name__ == "__main__":
                 )
                 print(f"[{src_name.upper()} → {tgt_name.upper()}] Greedy token sequence:")
                 print(transferred_tokens)
-                tokens_to_midi(transferred_tokens, output_path=f"transferred_{src_name}_to_{tgt_name}.mid")
+                tokens_to_midi(transferred_tokens, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}.mid"))
 
                 # Temperature decoding
                 transferred_tokens_temp = test_generate_token_transfer_with_temperature(
@@ -319,6 +325,6 @@ if __name__ == "__main__":
                     temperature=1.0,
                     device='cpu'
                 )
-                print(f"[{src_name.upper()} → {tgt_name.upper()}] Temperature token sequence:")
+                print(f"[{src_name.upper()} to {tgt_name.upper()}] Temperature token sequence:")
                 print(transferred_tokens_temp)
-                tokens_to_midi(transferred_tokens_temp, output_path=f"transferred_{src_name}_to_{tgt_name}_temp.mid")
+                tokens_to_midi(transferred_tokens_temp, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}_temp.mid"))

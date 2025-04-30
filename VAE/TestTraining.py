@@ -9,6 +9,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import pickle
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 ##########################################
 # Step 0: Data Pre-Processing
@@ -257,7 +259,9 @@ def loss_function(logits, targets, mu, logvar):
 def train_vae(model, dataloader, optimizer, epochs=20, device='cpu'):
     model.train()
     model.to(device)
+    total_loss_list = []
     for epoch in range(epochs):
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch")
         total_loss = 0.0
         for input_seq, target_seq, genre in dataloader:
             input_seq = input_seq.to(device)
@@ -270,18 +274,37 @@ def train_vae(model, dataloader, optimizer, epochs=20, device='cpu'):
             optimizer.step()
             total_loss += loss.item()
         avg_loss = total_loss / len(dataloader)
+        total_loss_list.append(avg_loss)
+        progress_bar.set_postfix(loss=avg_loss)
         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
+
+    # Plot the loss curve
+    plt.figure(figsize=(8, 5))
+    plt.plot(total_loss_list, label="Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("VAE Training Loss")
+    plt.legend()
+    plt.grid(True)
+    if run_folder:
+        plt.savefig(os.path.join(run_folder, "vae_training_loss.png"))
+        print(f"Saved training loss plot to {run_folder}")
 
 ##########################################
 # Main
 ##########################################
 
 if __name__ == "__main__":
+    run_num = "3"
+    run_folder = os.path.join("outputs", f"run{run_num}")
+    os.makedirs(run_folder, exist_ok=True)
+    print(f"Saving outputs to {run_folder}")
+
     # Load MIDI files for all genres
     genre_paths = {
-        "classical": "/MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
-        "jazz": "/MIDI-VAE_PaperData/Jazz",
-        "pop": "/MIDI-VAE_PaperData/Pop"
+        "classical": "../MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
+        "jazz": "../MIDI-VAE_PaperData/Jazz",
+        "pop": "../MIDI-VAE_PaperData/Pop"
     }
 
     tokenized_data = []
@@ -300,9 +323,10 @@ if __name__ == "__main__":
     # Build vocabulary library from tokenized data
     token_to_idx, idx_to_token = build_vocab(tokenized_data)
 
-    with open("token_to_idx.pkl", "wb") as f:
+    with open(os.path.join(run_folder, "token_to_idx.pkl"), "wb") as f:
         pickle.dump(token_to_idx, f)
-    with open("idx_to_token.pkl", "wb") as f:
+
+    with open(os.path.join(run_folder, "idx_to_token.pkl"), "wb") as f:
         pickle.dump(idx_to_token, f)
 
     # Load the vocabulary
@@ -314,7 +338,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # Training
-    train_vae(model, dataloader, optimizer, epochs=10, device='cpu')
+    train_vae(model, dataloader, optimizer, epochs=50, device='cpu')
 
-    torch.save(model.state_dict(), "music_vae_genre_transfer.pth")
+    torch.save(model.state_dict(), os.path.join(run_folder, "music_vae_genre_transfer.pth"))
     print("Model saved!")
