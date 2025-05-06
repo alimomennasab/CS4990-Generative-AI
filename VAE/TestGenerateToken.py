@@ -8,25 +8,38 @@ import torch.nn.functional as F
 import os
 from collections import Counter
 
+
 ##########################################
 # Step 1: Initialize VAE Model
 ##########################################
 class MusicVAE(nn.Module):
-    def __init__(self, vocab_size, embed_size=128, hidden_size=256, latent_size=64, num_layers=1, num_genres=3):
+    def __init__(
+        self,
+        vocab_size,
+        embed_size=128,
+        hidden_size=256,
+        latent_size=64,
+        num_layers=1,
+        num_genres=3,
+    ):
         super(MusicVAE, self).__init__()
         # Embedding layer to convert token indices into embeddings
         self.embedding = nn.Embedding(vocab_size, embed_size)
         # Embedding layer for genre labels
         self.genre_embedding = nn.Embedding(num_genres, embed_size)
         # Encoder LSTM to process input sequences
-        self.encoder_lstm = nn.LSTM(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
+        self.encoder_lstm = nn.LSTM(
+            embed_size + embed_size, hidden_size, num_layers, batch_first=True
+        )
         # Linear layers to obtain the mean and log variance for the latent distribution
         self.fc_mu = nn.Linear(hidden_size, latent_size)
         self.fc_logvar = nn.Linear(hidden_size, latent_size)
         # Linear layer to transform latent vector and genre into initial decoder hidden state
         self.latent_to_hidden = nn.Linear(latent_size + embed_size, hidden_size)
         # Decoder LSTM to generate output sequences
-        self.decoder_lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        self.decoder_lstm = nn.LSTM(
+            embed_size, hidden_size, num_layers, batch_first=True
+        )
         # Final linear layer to map LSTM outputs to vocabulary logits
         self.outputs_fc = nn.Linear(hidden_size, vocab_size)
 
@@ -43,7 +56,9 @@ class MusicVAE(nn.Module):
             logvar: Log variance of the latent distribution.
         """
         embedded = self.embedding(x)
-        genre_emb = self.genre_embedding(genre).unsqueeze(1).repeat(1, x.size(1), 1)
+        genre_emb = (
+            self.genre_embedding(genre).unsqueeze(1).repeat(1, x.size(1), 1)
+        )
         combined = torch.cat([embedded, genre_emb], dim=2)
         _, (h, _) = self.encoder_lstm(combined)
         h_last = h[-1]
@@ -105,11 +120,18 @@ class MusicVAE(nn.Module):
         logits = self.decode(z, x, genre)
         return logits, mu, logvar
 
+
 ##########################################
 # Step 2: Token-to-MIDI Conversion
 ##########################################
 
-def tokens_to_midi(tokens, time_resolution=0.05, default_duration=0.5, output_path="generated_output.mid"):
+
+def tokens_to_midi(
+    tokens,
+    time_resolution=0.05,
+    default_duration=0.5,
+    output_path="generated_output.mid",
+):
     """
     Convert a list of tokens back into a MIDI file.
 
@@ -120,7 +142,7 @@ def tokens_to_midi(tokens, time_resolution=0.05, default_duration=0.5, output_pa
       output_path: Path to save the generated MIDI file.
     """
     midi = pretty_midi.PrettyMIDI()
-    piano = pretty_midi.Instrument(program=0) # MIDI program number for piano
+    piano = pretty_midi.Instrument(program=0)  # MIDI program number for piano
     current_time = 0.0
     pending_notes = {}
 
@@ -138,22 +160,43 @@ def tokens_to_midi(tokens, time_resolution=0.05, default_duration=0.5, output_pa
             pitch = int(parts[-1])
             if pitch in pending_notes:
                 start_time, velocity = pending_notes.pop(pitch)
-                note = pretty_midi.Note(velocity=velocity, pitch=pitch, start=start_time, end=current_time)
+                note = pretty_midi.Note(
+                    velocity=velocity,
+                    pitch=pitch,
+                    start=start_time,
+                    end=current_time,
+                )
                 piano.notes.append(note)
 
     for pitch, (start_time, velocity) in pending_notes.items():
-        note = pretty_midi.Note(velocity=velocity, pitch=pitch, start=start_time, end=start_time + default_duration)
+        note = pretty_midi.Note(
+            velocity=velocity,
+            pitch=pitch,
+            start=start_time,
+            end=start_time + default_duration,
+        )
         piano.notes.append(note)
 
     midi.instruments.append(piano)
     midi.write(output_path)
     print(f"MIDI file saved to {output_path}")
 
+
 ##########################################
 # Step 3: Genre Transfer Generation
 ##########################################
 
-def test_generate_token_transfer_greedy(model, input_seq, token_to_idx, idx_to_token, source_genre, target_genre, max_length=100, device='cpu'):
+
+def test_generate_token_transfer_greedy(
+    model,
+    input_seq,
+    token_to_idx,
+    idx_to_token,
+    source_genre,
+    target_genre,
+    max_length=100,
+    device="cpu",
+):
     """
     Perform genre transfer by encoding with one genre and decoding with another.
     """
@@ -166,14 +209,20 @@ def test_generate_token_transfer_greedy(model, input_seq, token_to_idx, idx_to_t
         mu, logvar = model.encode(input_seq, source_genre)
         z = model.reparameterize(mu, logvar)
 
-        input_token = torch.tensor([[token_to_idx["<SOS>"]]], dtype=torch.long).to(device)
-        hidden = model.latent_to_hidden(torch.cat([z, model.genre_embedding(target_genre)], dim=1)).unsqueeze(0)
+        input_token = torch.tensor(
+            [[token_to_idx["<SOS>"]]], dtype=torch.long
+        ).to(device)
+        hidden = model.latent_to_hidden(
+            torch.cat([z, model.genre_embedding(target_genre)], dim=1)
+        ).unsqueeze(0)
         cell = torch.zeros_like(hidden)
 
         generated_tokens = []
         for _ in range(max_length):
             embedded = model.embedding(input_token)
-            output, (hidden, cell) = model.decoder_lstm(embedded, (hidden, cell))
+            output, (hidden, cell) = model.decoder_lstm(
+                embedded, (hidden, cell)
+            )
             logits = model.outputs_fc(output)
             next_token = torch.argmax(logits, dim=-1)
             token_id = next_token.item()
@@ -186,7 +235,17 @@ def test_generate_token_transfer_greedy(model, input_seq, token_to_idx, idx_to_t
     return generated_tokens
 
 
-def test_generate_token_transfer_with_temperature(model, input_seq, token_to_idx, idx_to_token, source_genre, target_genre, max_length=100, temperature=1.0, device='cpu'):
+def test_generate_token_transfer_with_temperature(
+    model,
+    input_seq,
+    token_to_idx,
+    idx_to_token,
+    source_genre,
+    target_genre,
+    max_length=100,
+    temperature=1.0,
+    device="cpu",
+):
     """
     Perform genre transfer using temperature-based sampling during decoding.
     """
@@ -198,14 +257,20 @@ def test_generate_token_transfer_with_temperature(model, input_seq, token_to_idx
         mu, logvar = model.encode(input_seq, source_genre)
         z = model.reparameterize(mu, logvar)
 
-        input_token = torch.tensor([[token_to_idx["<SOS>"]]], dtype=torch.long).to(device)
-        hidden = model.latent_to_hidden(torch.cat([z, model.genre_embedding(target_genre)], dim=1)).unsqueeze(0)
+        input_token = torch.tensor(
+            [[token_to_idx["<SOS>"]]], dtype=torch.long
+        ).to(device)
+        hidden = model.latent_to_hidden(
+            torch.cat([z, model.genre_embedding(target_genre)], dim=1)
+        ).unsqueeze(0)
         cell = torch.zeros_like(hidden)
 
         generated_tokens = []
         for _ in range(max_length):
             embedded = model.embedding(input_token)
-            output, (hidden, cell) = model.decoder_lstm(embedded, (hidden, cell))
+            output, (hidden, cell) = model.decoder_lstm(
+                embedded, (hidden, cell)
+            )
             logits = model.outputs_fc(output).squeeze(1)
             probs = F.softmax(logits / temperature, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
@@ -217,6 +282,7 @@ def test_generate_token_transfer_with_temperature(model, input_seq, token_to_idx
             input_token = next_token
 
     return generated_tokens
+
 
 ##########################################
 # Step 4: Run Genre Transfer
@@ -240,16 +306,34 @@ if __name__ == "__main__":
     num_genres = 3
 
     model_path = os.path.join(run_folder, "music_vae_genre_transfer.pth")
-    loaded_model = MusicVAE(vocab_size, embed_size, hidden_size, latent_size, num_layers=1, num_genres=num_genres)
-    loaded_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    loaded_model = MusicVAE(
+        vocab_size,
+        embed_size,
+        hidden_size,
+        latent_size,
+        num_layers=1,
+        num_genres=num_genres,
+    )
+    loaded_model.load_state_dict(
+        torch.load(model_path, map_location=torch.device("cpu"))
+    )
     loaded_model.eval()
     print("Model loaded successfully!")
 
     # define genre paths
     genre_dirs = {
-        0: ("classical", "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven"),
-        1: ("jazz", "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Jazz"),
-        2: ("pop", "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Pop")
+        0: (
+            "classical",
+            "../MIDI-VAE_PaperData/Classic and Bach/classic/Beethoven",
+        ),
+        1: (
+            "jazz",
+            "../MIDI-VAE_PaperData/Jazz",
+        ),
+        2: (
+            "pop",
+            "../MIDI-VAE_PaperData/Pop",
+        ),
     }
 
     sample_inputs = {}
@@ -272,7 +356,9 @@ if __name__ == "__main__":
                 if instrument.is_drum:
                     continue
                 for note in instrument.notes:
-                    events.append((note.start, "note_on", note.pitch, note.velocity))
+                    events.append(
+                        (note.start, "note_on", note.pitch, note.velocity)
+                    )
                     events.append((note.end, "note_off", note.pitch))
             events.sort(key=lambda x: x[0])
 
@@ -290,7 +376,13 @@ if __name__ == "__main__":
                     tokens.append(f"NOTE_OFF_{event[2]}")
                 previous_time = current_time
             if tokens:
-                sample_inputs[genre_idx] = torch.tensor([token_to_idx.get(tok, token_to_idx["<UNK>"]) for tok in ["<SOS>"] + tokens + ["<EOS>"]][:100], dtype=torch.long)
+                sample_inputs[genre_idx] = torch.tensor(
+                    [
+                        token_to_idx.get(tok, token_to_idx["<UNK>"])
+                        for tok in ["<SOS>"] + tokens + ["<EOS>"]
+                    ][:100],
+                    dtype=torch.long,
+                )
                 break
 
     # Generate greedy and temperature token sequences for each genre pair
@@ -308,23 +400,40 @@ if __name__ == "__main__":
                     idx_to_token=idx_to_token,
                     source_genre=source_genre,
                     target_genre=target_genre,
-                    device='cpu'
+                    device="cuda",
                 )
-                print(f"[{src_name.upper()} → {tgt_name.upper()}] Greedy token sequence:")
+                print(
+                    f"[{src_name.upper()} → {tgt_name.upper()}] Greedy token sequence:"
+                )
                 print(transferred_tokens)
-                tokens_to_midi(transferred_tokens, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}.mid"))
+                tokens_to_midi(
+                    transferred_tokens,
+                    output_path=os.path.join(
+                        run_folder, f"transferred_{src_name}_to_{tgt_name}.mid"
+                    ),
+                )
 
                 # Temperature decoding
-                transferred_tokens_temp = test_generate_token_transfer_with_temperature(
-                    model=loaded_model,
-                    input_seq=sample_inputs[source_genre],
-                    token_to_idx=token_to_idx,
-                    idx_to_token=idx_to_token,
-                    source_genre=source_genre,
-                    target_genre=target_genre,
-                    temperature=1.0,
-                    device='cpu'
+                transferred_tokens_temp = (
+                    test_generate_token_transfer_with_temperature(
+                        model=loaded_model,
+                        input_seq=sample_inputs[source_genre],
+                        token_to_idx=token_to_idx,
+                        idx_to_token=idx_to_token,
+                        source_genre=source_genre,
+                        target_genre=target_genre,
+                        temperature=1.0,
+                        device="cuda",
+                    )
                 )
-                print(f"[{src_name.upper()} to {tgt_name.upper()}] Temperature token sequence:")
+                print(
+                    f"[{src_name.upper()} to {tgt_name.upper()}] Temperature token sequence:"
+                )
                 print(transferred_tokens_temp)
-                tokens_to_midi(transferred_tokens_temp, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}_temp.mid"))
+                tokens_to_midi(
+                    transferred_tokens_temp,
+                    output_path=os.path.join(
+                        run_folder,
+                        f"transferred_{src_name}_to_{tgt_name}_temp.mid",
+                    ),
+                )
