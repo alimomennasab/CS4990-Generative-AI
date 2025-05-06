@@ -336,7 +336,7 @@ def run_transfers(generator, dataset, idx_to_token, device, run_folder):
 # Main
 ##########################################
 def main():
-    epochs = 10
+    epochs = 50
     run_num = "5"
 
     run_folder = os.path.join("outputs", f"run{run_num}")

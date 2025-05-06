@@ -338,8 +338,8 @@ def run_transfers(generator, dataset, idx_to_token, device, run_folder):
 # Main
 ##########################################
 def main():
-    epochs = 10
-    run_num = "1"
+    epochs = 50
+    run_num = "2"
 
     run_folder = os.path.join("outputs", f"run{run_num}")
     os.makedirs(run_folder, exist_ok=True)
