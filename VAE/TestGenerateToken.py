@@ -223,7 +223,7 @@ def test_generate_token_transfer_with_temperature(model, input_seq, token_to_idx
 ##########################################
 
 if __name__ == "__main__":
-    run_num = "3"
+    run_num = "4"
     run_folder = os.path.join("outputs", f"run{run_num}")
     os.makedirs(run_folder, exist_ok=True)
     print(f"Saving outputs to {run_folder}")
@@ -252,79 +252,83 @@ if __name__ == "__main__":
         2: ("pop", "/Users/alimomennasab/Desktop/CS4990/CS4990-Generative-AI/MIDI-VAE_PaperData/Pop")
     }
 
-    sample_inputs = {}
+    # input midi file
+    input_midi_path = '../test/autumn_leaves_jpa.mid'
+    source_genre = 1 
 
-    for genre_idx, (genre_name, midi_dir) in genre_dirs.items():
-        # load the midi files of a genre
-        midi_files = []
-        for f in os.listdir(midi_dir):
-            if f.endswith((".mid", ".midi")):
-                try:
-                    midi = pretty_midi.PrettyMIDI(os.path.join(midi_dir, f))
-                    midi_files.append(midi)
-                except Exception as e:
-                    print(f"Skipping {f} due to error: {e}")
+    # Tokenize the input MIDI file
+    try:
+        midi = pretty_midi.PrettyMIDI(input_midi_path)
+        events = []
+        for instrument in midi.instruments:
+            if instrument.is_drum:
+                continue
+            for note in instrument.notes:
+                events.append((note.start, "note_on", note.pitch, note.velocity))
+                events.append((note.end, "note_off", note.pitch))
+        events.sort(key=lambda x: x[0])
 
-        tokenized = []
-        for midi in midi_files:
-            events = []
-            for instrument in midi.instruments:
-                if instrument.is_drum:
-                    continue
-                for note in instrument.notes:
-                    events.append((note.start, "note_on", note.pitch, note.velocity))
-                    events.append((note.end, "note_off", note.pitch))
-            events.sort(key=lambda x: x[0])
+        tokens = []
+        previous_time = 0.0
+        for event in events:
+            current_time = event[0]
+            time_diff = current_time - previous_time
+            steps = int(round(time_diff / 0.05))
+            if steps > 0:
+                tokens.append(f"TIME_SHIFT_{steps}")
+            if event[1] == "note_on":
+                tokens.append(f"NOTE_ON_{event[2]}_{event[3]}")
+            elif event[1] == "note_off":
+                tokens.append(f"NOTE_OFF_{event[2]}")
+            previous_time = current_time
 
-            tokens = []
-            previous_time = 0.0
-            for event in events:
-                current_time = event[0]
-                time_diff = current_time - previous_time
-                steps = int(round(time_diff / 0.05))
-                if steps > 0:
-                    tokens.append(f"TIME_SHIFT_{steps}")
-                if event[1] == "note_on":
-                    tokens.append(f"NOTE_ON_{event[2]}_{event[3]}")
-                elif event[1] == "note_off":
-                    tokens.append(f"NOTE_OFF_{event[2]}")
-                previous_time = current_time
-            if tokens:
-                sample_inputs[genre_idx] = torch.tensor([token_to_idx.get(tok, token_to_idx["<UNK>"]) for tok in ["<SOS>"] + tokens + ["<EOS>"]][:100], dtype=torch.long)
-                break
+        if not tokens:
+            raise ValueError("No tokens extracted from MIDI file.")
 
-    # Generate greedy and temperature token sequences for each genre pair
-    for source_genre in genre_dirs:
-        for target_genre in genre_dirs:
-            if source_genre != target_genre:
-                src_name, _ = genre_dirs[source_genre]
-                tgt_name, _ = genre_dirs[target_genre]
+        input_tensor = torch.tensor(
+            [token_to_idx.get(tok, token_to_idx["<UNK>"]) for tok in ["<SOS>"] + tokens + ["<EOS>"]],
+            dtype=torch.long
+        )
 
-                # Greedy decoding
-                transferred_tokens = test_generate_token_transfer_greedy(
-                    model=loaded_model,
-                    input_seq=sample_inputs[source_genre],
-                    token_to_idx=token_to_idx,
-                    idx_to_token=idx_to_token,
-                    source_genre=source_genre,
-                    target_genre=target_genre,
-                    device='cpu'
-                )
-                print(f"[{src_name.upper()} → {tgt_name.upper()}] Greedy token sequence:")
-                print(transferred_tokens)
-                tokens_to_midi(transferred_tokens, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}.mid"))
 
-                # Temperature decoding
-                transferred_tokens_temp = test_generate_token_transfer_with_temperature(
-                    model=loaded_model,
-                    input_seq=sample_inputs[source_genre],
-                    token_to_idx=token_to_idx,
-                    idx_to_token=idx_to_token,
-                    source_genre=source_genre,
-                    target_genre=target_genre,
-                    temperature=1.0,
-                    device='cpu'
-                )
-                print(f"[{src_name.upper()} to {tgt_name.upper()}] Temperature token sequence:")
-                print(transferred_tokens_temp)
-                tokens_to_midi(transferred_tokens_temp, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}_temp.mid"))
+    except Exception as e:
+        print(f"Error processing MIDI file: {e}")
+        exit()
+
+
+    # Generate greedy and temperature token sequences for the input midi file
+    for target_genre in genre_dirs:
+        if source_genre != target_genre:
+            src_name, _ = genre_dirs[source_genre]
+            tgt_name, _ = genre_dirs[target_genre]
+
+            # Greedy decoding
+            transferred_tokens = test_generate_token_transfer_greedy(
+                model=loaded_model,
+                input_seq=input_tensor,
+                token_to_idx=token_to_idx,
+                idx_to_token=idx_to_token,
+                source_genre=source_genre,
+                target_genre=target_genre,
+                max_length = input_tensor.size(0),
+                device='cpu'
+            )
+            print(f"[{src_name.upper()} → {tgt_name.upper()}] Greedy token sequence:")
+            print(transferred_tokens)
+            tokens_to_midi(transferred_tokens, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}.mid"))
+
+            # Temperature decoding
+            transferred_tokens_temp = test_generate_token_transfer_with_temperature(
+                model=loaded_model,
+                input_seq=input_tensor,
+                token_to_idx=token_to_idx,
+                idx_to_token=idx_to_token,
+                source_genre=source_genre,
+                target_genre=target_genre,
+                max_length = input_tensor.size(0),
+                temperature=1.0,
+                device='cpu'
+            )
+            print(f"[{src_name.upper()} to {tgt_name.upper()}] Temperature token sequence:")
+            print(transferred_tokens_temp)
+            tokens_to_midi(transferred_tokens_temp, output_path=os.path.join(run_folder, f"transferred_{src_name}_to_{tgt_name}_temp.mid"))
