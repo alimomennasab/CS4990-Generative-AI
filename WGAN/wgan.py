@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import math
 
 ##########################################
 # Step 0: Data Pre-Processing
@@ -27,7 +28,8 @@ def load_midi_files(midi_dir):
                 print(f"Error loading {filename}: {e}")
     return midi_data_list
 
-def tokenize_midi(midi_data, time_resolution=0.05):
+def tokenize_midi(midi_data, time_resolution=0.1):
+    shift_buckets = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32] 
     events = []
     for instrument in midi_data.instruments:
         if instrument.is_drum:
@@ -42,13 +44,17 @@ def tokenize_midi(midi_data, time_resolution=0.05):
     for event in events:
         current_time = event[0]
         time_diff = current_time - previous_time
-        steps = int(round(time_diff / time_resolution))
+        steps = int(math.floor(time_diff / time_resolution))
         if steps > 0:
-            tokens.append(f"TIME_SHIFT_{steps}")
+            # quantize step to closest bucket
+            closest = min(shift_buckets, key=lambda x: abs(x - steps))
+            tokens.append(f"TIME_SHIFT_{closest}")
+
         if event[1] == "note_on":
             tokens.append(f"NOTE_ON_{event[2]}_{event[3]}")
         elif event[1] == "note_off":
             tokens.append(f"NOTE_OFF_{event[2]}")
+
         previous_time = current_time
 
     return tokens
@@ -339,7 +345,7 @@ def run_transfers(generator, dataset, idx_to_token, device, run_folder):
 ##########################################
 def main():
     epochs = 50
-    run_num = "2"
+    run_num = "3"
 
     run_folder = os.path.join("outputs", f"run{run_num}")
     os.makedirs(run_folder, exist_ok=True)
