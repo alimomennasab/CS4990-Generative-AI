@@ -10,6 +10,9 @@ from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from collections import Counter
+import math
+
 
 ##########################################
 # Step 0: Data Pre-Processing
@@ -27,7 +30,8 @@ def load_midi_files(midi_dir):
                 print(f"Error loading {filename}: {e}")
     return midi_data_list
 
-def tokenize_midi(midi_data, time_resolution=0.05):
+def tokenize_midi(midi_data, time_resolution=0.1):
+    shift_buckets = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32] 
     events = []
     for instrument in midi_data.instruments:
         if instrument.is_drum:
@@ -42,13 +46,17 @@ def tokenize_midi(midi_data, time_resolution=0.05):
     for event in events:
         current_time = event[0]
         time_diff = current_time - previous_time
-        steps = int(round(time_diff / time_resolution))
+        steps = int(math.floor(time_diff / time_resolution))
         if steps > 0:
-            tokens.append(f"TIME_SHIFT_{steps}")
+            # quantize step to closest bucket
+            closest = min(shift_buckets, key=lambda x: abs(x - steps))
+            tokens.append(f"TIME_SHIFT_{closest}")
+
         if event[1] == "note_on":
             tokens.append(f"NOTE_ON_{event[2]}_{event[3]}")
         elif event[1] == "note_off":
             tokens.append(f"NOTE_OFF_{event[2]}")
+
         previous_time = current_time
 
     return tokens
@@ -94,6 +102,41 @@ class TokenDataset(Dataset):
         target_seq = torch.tensor(seq_idx[1:], dtype=torch.long)
         genre = torch.tensor(self.genre_labels[idx], dtype=torch.long)
         return input_seq, target_seq, genre
+
+def plot_top_tokens(token_seqs, run_folder, top_n=50, filename="top_tokens.png"):
+    """
+    Plots the top-N most frequent tokens in the dataset.
+
+    Args:
+        token_seqs (List[List[str]]): List of token sequences.
+        run_folder (str): Folder path to save the plot.
+        top_n (int): Number of top tokens to show.
+        filename (str): Output filename for the plot.
+    """
+    from collections import Counter
+    import matplotlib.pyplot as plt
+    import os
+
+    flat_tokens = [token for seq in token_seqs for token in seq]
+    counter = Counter(flat_tokens)
+    top_tokens = counter.most_common(top_n)
+
+    if not top_tokens:
+        print("No tokens to plot.")
+        return
+
+    tokens, freqs = zip(*top_tokens)
+    plt.figure(figsize=(max(12, top_n * 0.4), 5))
+    plt.bar(tokens, freqs)
+    plt.xticks(rotation=90)
+    plt.title(f"Top {top_n} Most Frequent Tokens")
+    plt.tight_layout()
+
+    plot_path = os.path.join(run_folder, filename)
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Saved token frequency plot to {plot_path}")
+
 
 ##########################################
 # Step 3: Define GAN 
@@ -181,7 +224,9 @@ def train_gan(generator, discriminator, dataloader, g_optimizer, d_optimizer, cr
             # Train generator
             g_optimizer.zero_grad()
             fake_logits = generator(input_seq, genre)
-            fake_seq = fake_logits.argmax(dim=-1)
+            fake_probs = F.softmax(fake_logits, dim=-1)
+            token_range = torch.arange(fake_probs.size(-1), device=device).float()
+            fake_seq = torch.matmul(fake_probs, token_range).long()  # [batch_size, seq_len]
             fake_preds = discriminator(fake_seq, genre)
             g_loss = criterion(fake_preds, torch.ones_like(fake_preds))
             g_loss.backward()
@@ -336,8 +381,8 @@ def run_transfers(generator, dataset, idx_to_token, device, run_folder):
 # Main
 ##########################################
 def main():
-    epochs = 50
-    run_num = "5"
+    epochs = 20
+    run_num = "9"
 
     run_folder = os.path.join("outputs", f"run{run_num}")
     os.makedirs(run_folder, exist_ok=True)
@@ -356,10 +401,19 @@ def main():
 
     for genre, path in genre_paths.items():
         midis = load_midi_files(path)
-        for midi in midis:
+        for i, midi in enumerate(midis):
             tokens = tokenize_midi(midi)
             token_seqs.append(tokens)
             genre_labels.append(genre_to_idx[genre])
+
+            # Debug the first few tokenizations across all genres
+            if len(token_seqs) <= 5:
+                print(f"{genre.upper()} Sample {i}")
+                print("First 30 tokens:", tokens[:30])
+                print("Total tokens:", len(tokens))
+                print("Unique token types:", len(set(tokens)))
+                print()
+    plot_top_tokens(token_seqs, run_folder)
 
     token_to_idx, idx_to_token = build_vocab(token_seqs)
     dataset = TokenDataset(token_seqs, token_to_idx, genre_labels)
